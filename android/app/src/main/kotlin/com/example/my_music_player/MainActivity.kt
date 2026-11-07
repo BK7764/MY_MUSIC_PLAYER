@@ -53,8 +53,7 @@ class MainActivity : AudioServiceActivity() {
             MediaStore.Audio.Media.DATA,
             MediaStore.Audio.Media.DURATION,
             MediaStore.Audio.Media.BUCKET_DISPLAY_NAME,
-            MediaStore.Audio.Media.DATE_ADDED,
-            MediaStore.Audio.Media.MIME_TYPE
+            MediaStore.Audio.Media.DATE_ADDED
         )
 
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
@@ -68,20 +67,55 @@ class MainActivity : AudioServiceActivity() {
             val durationColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
             val folderColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.BUCKET_DISPLAY_NAME)
             val dateAddedColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
-            val mimeColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
+
 
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idColumn)
                 val path = cursor.getString(pathColumn) ?: ""
-                val lowerPath = path.lowercase()
-                val isCallRecording = lowerPath.contains("call recording") ||
-                    lowerPath.contains("call_recording") ||
-                    lowerPath.contains("callrecording") ||
-                    lowerPath.contains("/call recordings/") ||
-                    lowerPath.contains("/call_recordings/") ||
-                    lowerPath.contains("/callrecordings/") ||
-                    lowerPath.contains("/record/call/")
-                if (isCallRecording) continue
+                val lowerPath = path.replace('\\', '/').lowercase()
+
+                // Allow MP3 and M4A music files only.
+                val isMp3 = lowerPath.endsWith(".mp3")
+                val isM4a = lowerPath.endsWith(".m4a")
+                if (!isMp3 && !isM4a) continue
+
+                // M4A tracks shorter than one minute are excluded.
+                // MP3 tracks are not subject to this duration limit.
+                val durationMs = cursor.getLong(durationColumn)
+                if (isM4a && durationMs < 60_000L) continue
+
+                // Exclude common voice/call recording and Android system-sound folders.
+                val pathParts = lowerPath.split('/')
+                val fileName = pathParts.lastOrNull().orEmpty()
+                val excludedFolders = setOf(
+                    "record", "recording", "recordings", "recorded audio",
+                    "recorded audios", "call record", "call records",
+                    "call recording", "call recordings", "callrecording",
+                    "callrecordings", "voice", "voice record", "voice records",
+                    "voice recording", "voice recordings", "voice recorder",
+                    "sound recorder", "sound recordings", "voice memo",
+                    "voice memos", "voice note", "voice notes",
+                    "whatsapp voice notes", "notifications", "notification",
+                    "ringtones", "ringtone", "alarms", "alarm"
+                )
+                val excludedFolder = pathParts.any { part ->
+                    val folder = part.replace('_', ' ').replace('-', ' ')
+                        .replace(Regex("\\s+"), " ").trim()
+                    folder in excludedFolders ||
+                        folder.contains("call recording") ||
+                        folder.contains("voice recording") ||
+                        folder.contains("sound recorder") ||
+                        folder.contains("voice memo") ||
+                        folder.contains("voice note")
+                }
+                val excludedFile = listOf(
+                    "call recording", "call_record", "callrecord", "voice recording",
+                    "voice_record", "voicerecord", "voice note", "voice_note",
+                    "voicenote", "sound recording", "recording", "recorded audio",
+                    "notification", "ringtone", "alarm"
+                ).any { fileName.contains(it) }
+
+                if (excludedFolder || excludedFile) continue
 
                 val uri = ContentUris.withAppendedId(collection, id)
                 songs.add(
@@ -92,10 +126,10 @@ class MainActivity : AudioServiceActivity() {
                         "album" to (cursor.getString(albumColumn) ?: "Unknown Album"),
                         "path" to path,
                         "uri" to uri.toString(),
-                        "duration" to cursor.getLong(durationColumn),
+                        "duration" to durationMs,
                         "folder" to (cursor.getString(folderColumn) ?: "Unknown Folder"),
                         "dateAdded" to cursor.getLong(dateAddedColumn),
-                        "mimeType" to (cursor.getString(mimeColumn) ?: "audio/mpeg")
+                        "mimeType" to if (isM4a) "audio/mp4" else "audio/mpeg"
                     )
                 )
             }

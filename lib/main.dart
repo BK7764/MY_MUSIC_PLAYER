@@ -3,9 +3,6 @@ import 'dart:convert';
 
 import 'dart:io';
 
-
-
-
 import 'package:flutter/material.dart';
 
 import 'package:flutter/services.dart';
@@ -20,10 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:video_player/video_player.dart';
 
-
-
 Future<void> main() async {
-
   WidgetsFlutterBinding.ensureInitialized();
 
   await JustAudioBackground.init(
@@ -47,72 +41,49 @@ Future<void> main() async {
   );
 
   runApp(const MyMusicPlayer());
-
 }
 
-
-
 class MyMusicPlayer extends StatelessWidget {
-
   const MyMusicPlayer({super.key});
 
   @override
-
   Widget build(BuildContext context) {
-
     return MaterialApp(
-
       debugShowCheckedModeBanner: false,
 
       title: 'My Music Player',
 
       theme: ThemeData(
-
         brightness: Brightness.dark,
 
         scaffoldBackgroundColor: Colors.black,
 
         colorScheme: ColorScheme.fromSeed(
-
           seedColor: Colors.deepOrange,
 
           brightness: Brightness.dark,
-
         ),
 
         useMaterial3: true,
-
       ),
 
       home: const MusicHomePage(),
-
     );
-
   }
-
 }
 
-
-
 class MusicHomePage extends StatefulWidget {
-
   const MusicHomePage({super.key});
 
   @override
-
   State<MusicHomePage> createState() => _MusicHomePageState();
-
 }
 
-
-
-class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserver {
-
+class _MusicHomePageState extends State<MusicHomePage>
+    with WidgetsBindingObserver {
   static const channel = MethodChannel('my_music_player/media');
 
   final AudioPlayer player = AudioPlayer();
-
-
 
   List<Map<String, dynamic>> songs = [];
 
@@ -130,8 +101,6 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
 
   List<String> playQueue = [];
 
-
-
   String currentSong = 'No song selected';
 
   String currentArtist = 'Unknown Artist';
@@ -139,8 +108,6 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
   String? currentPath;
 
   int currentIndex = -1;
-
-
 
   bool scanning = false;
 
@@ -156,28 +123,19 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
 
   String selectedSection = 'Tracks';
 
-
-
   bool playlistReady = false;
 
   List<String> playlistPaths = [];
   List<String> playbackScopePaths = [];
-  List<String> playbackOrderPaths = [];
   bool _rebuildingPlayback = false;
   bool _playingCollection = false;
   bool _advancingPlayback = false;
   bool _completionPending = false;
   int _lastPersistedPositionMs = -5000;
-  // The player keeps a tiny rolling window (previous/current/next) loaded in
-  // just_audio. This keeps the notification's Previous/Play-Pause/Next
-  // controls available without loading the entire music library.
-
-
+  // One continuous playlist avoids replacing the active source at song edges.
 
   @override
-
   void initState() {
-
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
@@ -186,26 +144,23 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
     });
 
     player.processingStateStream.listen((state) {
-
       if (state == ProcessingState.completed) _handleSongCompleted();
-
     });
 
     // Persist the playback position periodically so swiping the app away from
     // Recents does not lose the last known position if Android kills the UI.
     player.positionStream.listen((position) {
       final ms = position.inMilliseconds;
-      if (currentPath != null && (ms - _lastPersistedPositionMs).abs() >= 5000) {
+      if (currentPath != null &&
+          (ms - _lastPersistedPositionMs).abs() >= 5000) {
         _lastPersistedPositionMs = ms;
         unawaited(_savePlaybackState());
       }
     });
 
     player.currentIndexStream.listen((index) {
-
-      // Only a small rolling window (up to three AudioSources) is loaded for
-      // performance. playlistPaths represents that window; playbackOrderPaths
-      // keeps the full logical order. Keep the UI song in sync with the window.
+      // Ignore source-index events while a new playlist is being installed.
+      if (_rebuildingPlayback) return;
       if (player.sequence.length != playlistPaths.length) return;
       if (index == null || index < 0 || index >= playlistPaths.length) return;
 
@@ -230,47 +185,7 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
         currentIndex = songs.indexWhere((s) => '${s['path']}' == path);
       });
       _savePlaybackState();
-
-      // If the notification's Next/Previous button moved inside the rolling
-      // window, recenter the window so the following Next/Previous actions
-      // remain available without loading the whole library.
-      final windowIndex = playlistPaths.indexOf(path);
-      if (!_rebuildingPlayback &&
-          playbackOrderPaths.length > 2 &&
-          windowIndex >= 0 &&
-          (windowIndex == 0 || windowIndex == playlistPaths.length - 1)) {
-        unawaited(_recenterAfterWindowMove(path));
-      }
-
     });
-
-  }
-
-
-
-  Future<void> _recenterAfterWindowMove(String path) async {
-    if (_rebuildingPlayback || _advancingPlayback || !mounted) return;
-    if (!playbackOrderPaths.contains(path)) return;
-
-    // Give the player state a moment to settle before replacing the small
-    // rolling source window.
-    await Future<void>.delayed(const Duration(milliseconds: 30));
-    if (!mounted || currentPath != path) return;
-
-    final position = player.position;
-    final wasPlaying = player.playing;
-
-    _rebuildingPlayback = true;
-    try {
-      await _loadRollingWindow(
-        path,
-        initialPosition: position,
-        autoplay: wasPlaying,
-      );
-    } finally {
-      _rebuildingPlayback = false;
-      _processPendingCompletionIfNeeded();
-    }
   }
 
   Future<void> _initializeApp() async {
@@ -300,7 +215,6 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
   }
 
   Future<void> _requestPermissionsAndScan() async {
-
     // Android 13+ requires notification permission for the media notification.
     // Request it before starting playback so the background controls can appear.
     if (Platform.isAndroid) {
@@ -319,59 +233,44 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
     final audio = await Permission.audio.request();
 
     if (!audio.isGranted) {
-
       if (!mounted) return;
 
       await showDialog<void>(
-
         context: context,
 
         builder: (_) => AlertDialog(
-
           title: const Text('Permissions Required'),
 
           content: const Text(
-
             'Music Player needs access to music, photos and videos to build the offline library.',
-
           ),
 
           actions: [
-
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Later')),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Later'),
+            ),
 
             FilledButton(
-
               onPressed: () async {
-
                 Navigator.pop(context);
 
                 await openAppSettings();
-
               },
 
               child: const Text('Open Settings'),
-
             ),
-
           ],
-
         ),
-
       );
 
       return;
-
     }
 
     await scanAll();
-
   }
 
-
-
   Future<void> _loadSavedData() async {
-
     final prefs = await SharedPreferences.getInstance();
 
     Map<String, List<String>> loadedPlaylists = {};
@@ -379,49 +278,32 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
     final playlistData = prefs.getString('playlists');
 
     if (playlistData != null) {
-
       try {
-
         final decoded = jsonDecode(playlistData) as Map<String, dynamic>;
 
         loadedPlaylists = decoded.map(
-
           (key, value) => MapEntry(key, List<String>.from(value as List)),
-
         );
-
       } catch (_) {}
-
     }
-
-
 
     Map<String, int> loadedCounts = {};
 
     final countData = prefs.getString('playCounts');
 
     if (countData != null) {
-
       try {
-
         final decoded = jsonDecode(countData) as Map<String, dynamic>;
 
         loadedCounts = decoded.map(
-
           (key, value) => MapEntry(key, (value as num).toInt()),
-
         );
-
       } catch (_) {}
-
     }
-
-
 
     if (!mounted) return;
 
     setState(() {
-
       favorites = prefs.getStringList('favorites')?.toSet() ?? {};
 
       recents = prefs.getStringList('recents') ?? [];
@@ -440,15 +322,10 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
       repeatMode = savedRepeat == 'one' || savedRepeat == 'all'
           ? savedRepeat
           : 'off';
-
     });
-
   }
 
-
-
   Future<void> _saveData() async {
-
     final prefs = await SharedPreferences.getInstance();
 
     await prefs.setStringList('favorites', favorites.toList());
@@ -466,10 +343,7 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
     await prefs.setBool('playbackShuffle', shuffle);
 
     await prefs.setString('playbackRepeatMode', repeatMode);
-
   }
-
-
 
   Future<void> scanAll() async {
     if (scanning) return;
@@ -495,7 +369,6 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
         scanning = false;
         playlistReady = false;
         playlistPaths = [];
-        playbackOrderPaths = [];
       });
 
       // Scanning only builds the library. It must NOT build a huge audio
@@ -504,7 +377,9 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Scan complete: ${loaded.length} song(s) found')),
+          SnackBar(
+            content: Text('Scan complete: ${loaded.length} song(s) found'),
+          ),
         );
       }
 
@@ -528,9 +403,8 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
     } catch (e) {
       if (!mounted) return;
       setState(() => scanning = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Media scan failed: $e')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Media scan failed: $e')));
     }
   }
 
@@ -541,9 +415,9 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
 
     if (lastPath == null || lastPath.isEmpty || !mounted) return;
 
-    final matches = songs.where(
-      (s) => '${s['path'] ?? ''}' == lastPath,
-    ).toList();
+    final matches = songs
+        .where((s) => '${s['path'] ?? ''}' == lastPath)
+        .toList();
     if (matches.isEmpty) return;
 
     final song = matches.first;
@@ -558,9 +432,7 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
       currentSong = '${song['title'] ?? 'Unknown Song'}';
       currentArtist = '${song['artist'] ?? 'Unknown Artist'}';
       currentPath = lastPath;
-      currentIndex = songs.indexWhere(
-        (s) => '${s['path'] ?? ''}' == lastPath,
-      );
+      currentIndex = songs.indexWhere((s) => '${s['path'] ?? ''}' == lastPath);
     });
 
     try {
@@ -576,49 +448,30 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
   }
 
   void _applySort(List<Map<String, dynamic>> list) {
-
     list.sort((a, b) {
-
       if (sortMode == 'title') {
-
         return '${a['title'] ?? ''}'.toLowerCase().compareTo(
-
-              '${b['title'] ?? ''}'.toLowerCase(),
-
-            );
-
+          '${b['title'] ?? ''}'.toLowerCase(),
+        );
       }
 
       if (sortMode == 'play') {
-
         return (playCounts['${b['path'] ?? ''}'] ?? 0).compareTo(
-
-              playCounts['${a['path'] ?? ''}'] ?? 0,
-
-            );
-
+          playCounts['${a['path'] ?? ''}'] ?? 0,
+        );
       }
 
       return (int.tryParse('${b['dateAdded'] ?? 0}') ?? 0).compareTo(
-
-            int.tryParse('${a['dateAdded'] ?? 0}') ?? 0,
-
-          );
-
+        int.tryParse('${a['dateAdded'] ?? 0}') ?? 0,
+      );
     });
-
   }
 
-
-
   void searchSongs(String value) {
-
     final query = value.trim().toLowerCase();
 
     setState(() {
-
       filteredSongs = songs.where((song) {
-
         final title = '${song['title'] ?? ''}'.toLowerCase();
 
         final artist = '${song['artist'] ?? ''}'.toLowerCase();
@@ -628,24 +481,17 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
         final folder = '${song['folder'] ?? ''}'.toLowerCase();
 
         return query.isEmpty ||
-
             title.contains(query) ||
-
             artist.contains(query) ||
-
             album.contains(query) ||
-
             folder.contains(query);
-
       }).toList();
-
     });
-
   }
 
-
-
-  Future<List<Map<String, dynamic>>> _buildPlaybackOrder(String startPath) async {
+  Future<List<Map<String, dynamic>>> _buildPlaybackOrder(
+    String startPath,
+  ) async {
     final scope = playbackScopePaths.isEmpty
         ? List<Map<String, dynamic>>.from(songs)
         : songs.where((s) {
@@ -654,8 +500,7 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
 
     final byPath = <String, Map<String, dynamic>>{
       for (final song in songs)
-        if ('${song['path'] ?? ''}'.isNotEmpty)
-          '${song['path']}': song,
+        if ('${song['path'] ?? ''}'.isNotEmpty) '${song['path']}': song,
     };
 
     final queueSet = playQueue.toSet();
@@ -696,12 +541,10 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
 
         remaining
           ..clear()
-          ..addAll(after.where(
-            (s) => !queueSet.contains('${s['path'] ?? ''}'),
-          ))
-          ..addAll(before.where(
-            (s) => !queueSet.contains('${s['path'] ?? ''}'),
-          ));
+          ..addAll(after.where((s) => !queueSet.contains('${s['path'] ?? ''}')))
+          ..addAll(
+            before.where((s) => !queueSet.contains('${s['path'] ?? ''}')),
+          );
       }
     }
 
@@ -716,22 +559,22 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
     Map<String, dynamic> song,
   ) async {
     final existing = '${song['albumArt'] ?? ''}';
-    if (existing.isNotEmpty && existing != 'null' && File(existing).existsSync()) {
+    if (existing.isNotEmpty &&
+        existing != 'null' &&
+        File(existing).existsSync()) {
       return song;
     }
 
     try {
-      final bytes = await channel.invokeMethod<Uint8List>(
-        'getArtwork',
-        {
-          'uri': '${song['uri'] ?? ''}',
-          'path': '${song['path'] ?? ''}',
-        },
-      );
+      final bytes = await channel.invokeMethod<Uint8List>('getArtwork', {
+        'uri': '${song['uri'] ?? ''}',
+        'path': '${song['path'] ?? ''}',
+      });
 
       if (bytes == null || bytes.isEmpty) return song;
 
-      final id = '${song['id'] ?? song['path'] ?? DateTime.now().microsecondsSinceEpoch}';
+      final id =
+          '${song['id'] ?? song['path'] ?? DateTime.now().microsecondsSinceEpoch}';
       final file = File('${Directory.systemTemp.path}/my_music_player_art_$id');
       if (!file.existsSync() || file.lengthSync() != bytes.length) {
         await file.writeAsBytes(bytes, flush: false);
@@ -754,7 +597,8 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
       title: '${song['title'] ?? 'Unknown Song'}',
       artist: '${song['artist'] ?? 'Unknown Artist'}',
       album: '${song['album'] ?? 'Unknown Album'}',
-      artUri: artPath.isNotEmpty && artPath != 'null' && File(artPath).existsSync()
+      artUri:
+          artPath.isNotEmpty && artPath != 'null' && File(artPath).existsSync()
           ? Uri.file(artPath)
           : null,
       duration: Duration(
@@ -769,140 +613,78 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
     return AudioSource.file(path, tag: tag);
   }
 
-
-
   Future<void> _loadPlaybackOrder(
     List<Map<String, dynamic>> order, {
     Duration initialPosition = Duration.zero,
     bool autoplay = true,
   }) async {
-    if (order.isEmpty || _rebuildingPlayback) return;
+    if (order.isEmpty) return;
 
     _rebuildingPlayback = true;
     try {
-      playbackOrderPaths = order
-          .map((s) => '${s['path'] ?? ''}')
-          .where((p) => p.isNotEmpty)
+      final orderedSongs = order
+          .where((song) => '${song['path'] ?? ''}'.isNotEmpty)
           .toList();
+      if (orderedSongs.isEmpty) return;
 
-      if (playbackOrderPaths.isEmpty) return;
+      // Extract artwork for the first/current song only. just_audio prepares
+      // the remaining sources lazily, so a large library does not stall startup.
+      orderedSongs[0] = await _withNotificationArtwork(orderedSongs[0]);
 
-      final centerPath = playbackOrderPaths.first;
-      await _loadRollingWindow(
-        centerPath,
+      final newPaths = orderedSongs
+          .map((song) => '${song['path'] ?? ''}')
+          .toList();
+      final sources = orderedSongs.map(_audioSourceFor).toList();
+
+      await player.setAudioSources(
+        sources,
+        initialIndex: 0,
         initialPosition: initialPosition,
-        autoplay: autoplay,
       );
+      await player.setLoopMode(
+        repeatMode == 'one'
+            ? LoopMode.one
+            : repeatMode == 'all'
+            ? LoopMode.all
+            : LoopMode.off,
+      );
+      await player.setShuffleModeEnabled(false);
+
+      playlistPaths = List<String>.from(newPaths);
+      playlistReady = true;
+
+      final current = orderedSongs.first;
+      final path = newPaths.first;
+      final libraryIndex = songs.indexWhere(
+        (song) => '${song['path'] ?? ''}' == path,
+      );
+
+      if (libraryIndex >= 0 && '${current['albumArt'] ?? ''}'.isNotEmpty) {
+        final updated = Map<String, dynamic>.from(current);
+        songs[libraryIndex] = updated;
+        final filteredIndex = filteredSongs.indexWhere(
+          (song) => '${song['path'] ?? ''}' == path,
+        );
+        if (filteredIndex >= 0) filteredSongs[filteredIndex] = updated;
+      }
+
+      if (mounted) {
+        setState(() {
+          currentPath = path;
+          currentSong = '${current['title'] ?? 'Unknown Song'}';
+          currentArtist = '${current['artist'] ?? 'Unknown Artist'}';
+          currentIndex = libraryIndex;
+        });
+      }
+
+      // Do not await play(): its Future completes only when playback is paused
+      // or reaches the end of the playlist.
+      if (autoplay) unawaited(player.play());
     } finally {
       _rebuildingPlayback = false;
       _processPendingCompletionIfNeeded();
     }
   }
-
-  Future<void> _loadRollingWindow(
-    String centerPath, {
-    Duration initialPosition = Duration.zero,
-    bool autoplay = true,
-  }) async {
-    if (centerPath.isEmpty || playbackOrderPaths.isEmpty) return;
-
-    final center = playbackOrderPaths.indexOf(centerPath);
-    if (center < 0) return;
-
-    final windowPaths = <String>[];
-    void addUnique(String path) {
-      if (path.isNotEmpty && !windowPaths.contains(path)) {
-        windowPaths.add(path);
-      }
-    }
-
-    final total = playbackOrderPaths.length;
-
-    // Keep previous/current/next available to the media notification.
-    if (total >= 3) {
-      addUnique(playbackOrderPaths[(center - 1 + total) % total]);
-      addUnique(playbackOrderPaths[center]);
-      addUnique(playbackOrderPaths[(center + 1) % total]);
-    } else {
-      for (final path in playbackOrderPaths) {
-        addUnique(path);
-      }
-    }
-
-    final centerWindowIndex = windowPaths.indexOf(centerPath);
-    if (centerWindowIndex < 0) return;
-
-    final byPath = <String, Map<String, dynamic>>{
-      for (final song in songs)
-        if ('${song['path'] ?? ''}'.isNotEmpty)
-          '${song['path']}': song,
-    };
-
-    final windowSongs = <Map<String, dynamic>>[];
-    for (final path in windowPaths) {
-      final song = byPath[path];
-      if (song != null) windowSongs.add(song);
-    }
-
-    if (windowSongs.isEmpty) return;
-
-    final actualCenterIndex = windowSongs.indexWhere(
-      (song) => '${song['path'] ?? ''}' == centerPath,
-    );
-    if (actualCenterIndex < 0) return;
-
-    // Artwork is extracted only for the currently playing song, not for the
-    // whole library. This keeps scanning/startup fast while still giving the
-    // background notification and lock screen the song artwork.
-    final artworkSong = await _withNotificationArtwork(
-      windowSongs[actualCenterIndex],
-    );
-    windowSongs[actualCenterIndex] = artworkSong;
-
-    await player.setAudioSources(
-      windowSongs.map(_audioSourceFor).toList(),
-      initialIndex: actualCenterIndex,
-      initialPosition: initialPosition,
-    );
-
-    await player.setLoopMode(
-      repeatMode == 'one' ? LoopMode.one : LoopMode.off,
-    );
-    await player.setShuffleModeEnabled(false);
-
-    playlistPaths = windowSongs
-        .map((song) => '${song['path'] ?? ''}')
-        .toList();
-    playlistReady = true;
-
-    if (mounted) {
-      final song = windowSongs[actualCenterIndex];
-      final path = '${song['path'] ?? ''}';
-      final libraryIndex = songs.indexWhere(
-        (s) => '${s['path'] ?? ''}' == path,
-      );
-      if (libraryIndex >= 0 && '${song['albumArt'] ?? ''}'.isNotEmpty) {
-        final updated = Map<String, dynamic>.from(song);
-        songs[libraryIndex] = updated;
-        final filteredIndex = filteredSongs.indexWhere(
-          (s) => '${s['path'] ?? ''}' == path,
-        );
-        if (filteredIndex >= 0) {
-          filteredSongs[filteredIndex] = updated;
-        }
-      }
-      setState(() {
-        currentPath = path;
-        currentSong = '${song['title'] ?? 'Unknown Song'}';
-        currentArtist = '${song['artist'] ?? 'Unknown Artist'}';
-        currentIndex = libraryIndex;
-      });
-    }
-
-    if (autoplay) await player.play();
-  }
-
-  
 
   Future<void> _preparePlaylist({
     String? startPath,
@@ -941,10 +723,11 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
     }
 
     try {
-      // If the same file is already loaded, do not rebuild anything.
-      if (playlistReady && currentPath == path) {
-        await player.seek(startPosition);
-        await player.play();
+      final loadedIndex = playlistReady ? playlistPaths.indexOf(path) : -1;
+      // Rebuild for collection playback so its scope is not inherited from an old list.
+      if (loadedIndex >= 0 && !_playingCollection) {
+        await player.seek(startPosition, index: loadedIndex);
+        unawaited(player.play());
       } else {
         await _preparePlaylist(
           startPath: path,
@@ -978,9 +761,8 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
       await _saveData();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not play song: $e')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Could not play song: $e')));
     }
   }
 
@@ -990,9 +772,7 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
   }) async {
     if (list.isEmpty) return;
 
-    final valid = list
-        .where((s) => '${s['path'] ?? ''}'.isNotEmpty)
-        .toList();
+    final valid = list.where((s) => '${s['path'] ?? ''}'.isNotEmpty).toList();
     if (valid.isEmpty) return;
 
     playbackScopePaths = valid.map((s) => '${s['path']}').toList();
@@ -1018,10 +798,12 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
   Future<void> _applyRepeatMode(String mode) async {
     final normalized = mode == 'one' || mode == 'all' ? mode : 'off';
 
-    // Only Repeat One needs just_audio's built-in loop. Repeat All and the
-    // normal continuous player are handled by our path-based navigator.
     await player.setLoopMode(
-      normalized == 'one' ? LoopMode.one : LoopMode.off,
+      normalized == 'one'
+          ? LoopMode.one
+          : normalized == 'all'
+          ? LoopMode.all
+          : LoopMode.off,
     );
 
     if (mounted && repeatMode != normalized) {
@@ -1038,30 +820,26 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
   }) async {
     if (path.isEmpty) return;
 
-    final matches = songs.where(
-      (s) => '${s['path'] ?? ''}' == path,
-    ).toList();
+    final matches = songs
+        .where((song) => '${song['path'] ?? ''}' == path)
+        .toList();
     if (matches.isEmpty) return;
 
     final song = matches.first;
+    var loadedIndex = playlistReady ? playlistPaths.indexOf(path) : -1;
 
-    // Rebuild the logical order only when the requested path is not part of
-    // the current order. The actual player receives only a 2-3 song window.
-    if (playbackOrderPaths.isEmpty ||
-        !playbackOrderPaths.contains(path)) {
-      playbackOrderPaths = (await _buildPlaybackOrder(path))
-          .map((s) => '${s['path'] ?? ''}')
-          .where((p) => p.isNotEmpty)
-          .toList();
+    if (loadedIndex < 0) {
+      final order = await _buildPlaybackOrder(path);
+      await _loadPlaybackOrder(
+        order,
+        initialPosition: position,
+        autoplay: true,
+      );
+      loadedIndex = playlistPaths.indexOf(path);
+    } else {
+      await player.seek(position, index: loadedIndex);
+      unawaited(player.play());
     }
-
-    if (playbackOrderPaths.isEmpty) return;
-
-    await _loadRollingWindow(
-      path,
-      initialPosition: position,
-      autoplay: true,
-    );
 
     if (!mounted) return;
 
@@ -1070,16 +848,14 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
       currentSong = '${song['title'] ?? 'Unknown Song'}';
       currentArtist = '${song['artist'] ?? 'Unknown Artist'}';
       currentIndex = songs.indexWhere(
-        (s) => '${s['path'] ?? ''}' == path,
+        (item) => '${item['path'] ?? ''}' == path,
       );
       playCounts[path] = (playCounts[path] ?? 0) + 1;
     });
 
     recents.remove(path);
     recents.insert(0, path);
-    if (recents.length > 50) {
-      recents = recents.sublist(0, 50);
-    }
+    if (recents.length > 50) recents = recents.sublist(0, 50);
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('lastPlayedPath', path);
@@ -1151,140 +927,140 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
   Future<void> nextSong() async {
     if (songs.isEmpty) return;
 
-    // Queue always has priority.
-    while (playQueue.isNotEmpty) {
-      final queuedPath = playQueue.removeAt(0);
-      await _saveData();
-
-      final exists = songs.any(
-        (s) => '${s['path'] ?? ''}' == queuedPath,
-      );
-      if (!exists) continue;
-
-      await _startPath(queuedPath);
+    if (!playlistReady || playlistPaths.isEmpty) {
+      if (currentPath != null && currentPath!.isNotEmpty) {
+        await _preparePlaylist(startPath: currentPath, autoplay: true);
+      } else {
+        await playSong(songs.first);
+      }
       return;
     }
 
-    if (currentPath == null || currentPath!.isEmpty) {
-      await playSong(songs.first);
-      return;
+    final current = player.currentIndex ?? 0;
+    var next = current + 1;
+
+    // Queued tracks are inserted in the live playlist before normal tracks.
+    // This fallback also restores queue priority for an older saved session.
+    if (playQueue.isNotEmpty) {
+      final queuedIndex = playlistPaths.indexOf(playQueue.first);
+      if (queuedIndex > current) next = queuedIndex;
     }
 
-    if (playbackOrderPaths.isEmpty ||
-        !playbackOrderPaths.contains(currentPath)) {
-      playbackOrderPaths = (await _buildPlaybackOrder(currentPath!))
-          .map((s) => '${s['path'] ?? ''}')
-          .where((p) => p.isNotEmpty)
-          .toList();
-    }
-
-    if (playbackOrderPaths.isEmpty) return;
-
-    final current = playbackOrderPaths.indexOf(currentPath!);
-    if (current < 0) return;
-
-    // Continuous playback: after the last track, start from the first.
-    final nextIndex = (current + 1) % playbackOrderPaths.length;
-    await _startPath(playbackOrderPaths[nextIndex]);
+    if (next >= playlistPaths.length) next = 0;
+    await player.seek(Duration.zero, index: next);
+    unawaited(player.play());
   }
 
   Future<void> previousSong() async {
-    if (songs.isEmpty || currentPath == null) return;
-
-    if (playbackOrderPaths.isEmpty ||
-        !playbackOrderPaths.contains(currentPath)) {
-      playbackOrderPaths = (await _buildPlaybackOrder(currentPath!))
-          .map((s) => '${s['path'] ?? ''}')
-          .where((p) => p.isNotEmpty)
-          .toList();
+    if (!playlistReady || playlistPaths.isEmpty) {
+      if (currentPath != null && currentPath!.isNotEmpty) {
+        await _preparePlaylist(startPath: currentPath, autoplay: true);
+      }
+      return;
     }
 
-    if (playbackOrderPaths.isEmpty) return;
+    final current = player.currentIndex ?? 0;
+    final previous = current <= 0 ? playlistPaths.length - 1 : current - 1;
+    await player.seek(Duration.zero, index: previous);
+    unawaited(player.play());
+  }
 
-    final current = playbackOrderPaths.indexOf(currentPath!);
-    if (current < 0) return;
+  Future<void> _insertQueuedSource(String path, {required bool atFront}) async {
+    if (!playlistReady || playlistPaths.isEmpty) return;
 
-    final previousIndex = current <= 0
-        ? playbackOrderPaths.length - 1
-        : current - 1;
+    final current = player.currentIndex ?? 0;
+    if (current < 0 || current >= playlistPaths.length) return;
+    if (playlistPaths[current] == path) return;
 
-    await _startPath(playbackOrderPaths[previousIndex]);
+    // A selected song may already exist later in the normal library order.
+    // Move that source instead of leaving a duplicate in the playlist.
+    final existingIndex = playlistPaths.indexOf(path);
+    if (existingIndex > current) {
+      await player.removeAudioSourceAt(existingIndex);
+      playlistPaths.removeAt(existingIndex);
+    }
+
+    var insertionIndex = current + 1;
+    if (!atFront) {
+      // Append after all already-pending queue entries but before normal tracks.
+      for (final queuedPath in playQueue) {
+        if (queuedPath == path) continue;
+        final queuedIndex = playlistPaths.indexOf(queuedPath);
+        if (queuedIndex >= insertionIndex) insertionIndex = queuedIndex + 1;
+      }
+    }
+    if (insertionIndex > playlistPaths.length) {
+      insertionIndex = playlistPaths.length;
+    }
+
+    final matches = songs
+        .where((song) => '${song['path'] ?? ''}' == path)
+        .toList();
+    if (matches.isEmpty) return;
+
+    final song = await _withNotificationArtwork(matches.first);
+    await player.insertAudioSource(insertionIndex, _audioSourceFor(song));
+    playlistPaths.insert(insertionIndex, path);
+
+    final libraryIndex = songs.indexWhere(
+      (item) => '${item['path'] ?? ''}' == path,
+    );
+    if (libraryIndex >= 0 && '${song['albumArt'] ?? ''}'.isNotEmpty) {
+      songs[libraryIndex] = song;
+      final filteredIndex = filteredSongs.indexWhere(
+        (item) => '${item['path'] ?? ''}' == path,
+      );
+      if (filteredIndex >= 0) filteredSongs[filteredIndex] = song;
+    }
   }
 
   Future<void> playNext(String path) async {
+    if (path.isEmpty || path == currentPath) return;
 
-    // Queue changes are kept in memory and persisted immediately.
-    // Do not rebuild the complete AudioPlayer source list here: that was
-    // one of the main causes of a visible pause/lag when adding to queue.
     playQueue.remove(path);
     playQueue.insert(0, path);
-
     await _saveData();
+    await _insertQueuedSource(path, atFront: true);
 
     if (mounted) {
-
-      ScaffoldMessenger.of(context).showSnackBar(
-
-        const SnackBar(content: Text('Added to play next')),
-
-      );
-
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Added to play next')));
     }
-
   }
-
-
 
   Future<void> addToQueue(String path) async {
+    if (path.isEmpty || path == currentPath) return;
 
-    // Keep the currently loaded audio sequence untouched. The queue is
-    // consumed by nextSong(), so adding a track is now instantaneous.
-    if (!playQueue.contains(path)) playQueue.add(path);
-
+    playQueue.remove(path);
+    playQueue.add(path);
     await _saveData();
+    await _insertQueuedSource(path, atFront: false);
 
     if (mounted) {
-
-      ScaffoldMessenger.of(context).showSnackBar(
-
-        const SnackBar(content: Text('Added to play queue')),
-
-      );
-
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Added to play queue')));
     }
-
   }
 
-
-
   void _showQueue() {
-
     showModalBottomSheet<void>(
-
       context: context,
 
       isScrollControlled: true,
 
       builder: (sheetContext) => SafeArea(
-
         child: SizedBox(
-
           height: MediaQuery.of(context).size.height * .65,
 
           child: Column(
-
             children: [
-
               ListTile(
-
                 title: Text('Play queue (${playQueue.length})'),
 
                 trailing: IconButton(
-
                   icon: const Icon(Icons.clear_all),
 
                   onPressed: () async {
-
                     playQueue.clear();
 
                     await _saveData();
@@ -1292,113 +1068,84 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
                     if (sheetContext.mounted) Navigator.pop(sheetContext);
 
                     setState(() {});
-
                   },
-
                 ),
-
               ),
 
               Expanded(
-
                 child: playQueue.isEmpty
-
                     ? const Center(child: Text('Queue is empty'))
-
                     : ListView.builder(
-
                         itemCount: playQueue.length,
 
                         itemBuilder: (_, index) {
-
                           final path = playQueue[index];
 
-                          final match = songs.where((s) => '${s['path']}' == path).toList();
+                          final match = songs
+                              .where((s) => '${s['path']}' == path)
+                              .toList();
 
                           if (match.isEmpty) return const SizedBox.shrink();
 
                           final song = match.first;
 
                           return ListTile(
-
                             leading: artwork(song, size: 52),
 
                             title: Text('${song['title'] ?? 'Unknown Song'}'),
 
-                            subtitle: Text('${song['artist'] ?? 'Unknown Artist'}'),
+                            subtitle: Text(
+                              '${song['artist'] ?? 'Unknown Artist'}',
+                            ),
 
                             trailing: IconButton(
-
                               icon: const Icon(Icons.close),
 
                               onPressed: () async {
-
                                 playQueue.removeAt(index);
 
                                 await _saveData();
 
                                 setState(() {});
-
                               },
-
                             ),
 
                             onTap: () async {
-
                               playQueue.removeAt(index);
 
                               await _saveData();
 
-                              if (sheetContext.mounted) Navigator.pop(sheetContext);
+                              if (sheetContext.mounted)
+                                Navigator.pop(sheetContext);
 
                               await playSong(song);
-
                             },
-
                           );
-
                         },
-
                       ),
-
               ),
-
             ],
-
           ),
-
         ),
-
       ),
-
     );
-
   }
 
-
-
   Future<void> _showSortOrder() async {
-
     final selected = await showDialog<String>(
-
       context: context,
 
       builder: (context) => SimpleDialog(
-
         title: const Text('Sort Order'),
 
         children: [
-
           _sortOption(context, 'title', 'Sort by song title'),
 
           _sortOption(context, 'date', 'Sort by date added'),
 
           _sortOption(context, 'play', 'Sort by play count'),
-
         ],
-
       ),
-
     );
 
     if (selected == null) return;
@@ -1414,84 +1161,54 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
     await _saveData();
     if (currentPath != null) {
       final order = await _buildPlaybackOrder(currentPath!);
-      await _loadPlaybackOrder(order, initialPosition: position, autoplay: wasPlaying);
+      await _loadPlaybackOrder(
+        order,
+        initialPosition: position,
+        autoplay: wasPlaying,
+      );
     }
-
   }
 
-
-
   Widget _sortOption(BuildContext context, String value, String text) {
-
     return SimpleDialogOption(
-
       onPressed: () => Navigator.pop(context, value),
 
       child: Row(
-
         children: [
-
           Expanded(child: Text(text)),
 
           if (sortMode == value)
-
             const Icon(Icons.check, color: Colors.redAccent),
-
         ],
-
       ),
-
     );
-
   }
 
-
-
   void _toggleMultiSelect() {
-
     setState(() {
-
       multiSelectMode = !multiSelectMode;
 
       if (!multiSelectMode) selectedPaths.clear();
-
     });
-
   }
-
-
 
   void _toggleSelected(String path) {
-
     setState(() {
-
       if (selectedPaths.contains(path)) {
-
         selectedPaths.remove(path);
-
       } else {
-
         selectedPaths.add(path);
-
       }
-
     });
-
   }
 
-
-
   Future<void> _multiFavorite() async {
-
     setState(() => favorites.addAll(selectedPaths));
 
     await _saveData();
 
     _toggleMultiSelect();
-
   }
-
-
 
   Future<void> _multiPlaylist() async {
     final selected = selectedPaths.where((p) => p.isNotEmpty).toList();
@@ -1547,7 +1264,9 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
     if (multiSelectMode) _toggleMultiSelect();
 
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${selected.length} song(s) added to "$playlistName"')),
+      SnackBar(
+        content: Text('${selected.length} song(s) added to "$playlistName"'),
+      ),
     );
   }
 
@@ -1576,9 +1295,7 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
           controller: controller,
           autofocus: true,
           textInputAction: TextInputAction.done,
-          decoration: const InputDecoration(
-            hintText: 'Playlist name',
-          ),
+          decoration: const InputDecoration(hintText: 'Playlist name'),
           onSubmitted: (value) {
             final trimmed = value.trim();
             if (trimmed.isNotEmpty) {
@@ -1684,112 +1401,80 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
   }
 
   Future<void> _showSongInfo(Map<String, dynamic> song) async {
-
     final path = '${song['path'] ?? ''}';
 
     await showDialog<void>(
-
       context: context,
 
       builder: (context) => AlertDialog(
-
         title: Text('${song['title'] ?? 'Song Info'}'),
 
         content: Text(
-
           'Artist: ${song['artist'] ?? 'Unknown'}\n'
-
           'Album: ${song['album'] ?? 'Unknown'}\n'
-
           'Folder: ${song['folder'] ?? 'Unknown'}\n'
-
           'Duration: ${_formatMs(song['duration'])}\n'
-
           'Play count: ${playCounts[path] ?? 0}\n\n'
-
           'Path: $path',
-
         ),
 
         actions: [
-
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
-
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
         ],
-
       ),
-
     );
-
   }
 
-
-
   String _formatMs(dynamic value) {
-
     final d = Duration(milliseconds: int.tryParse('$value') ?? 0);
 
     return '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
-
   }
 
-
-
   Future<void> _shareSong(Map<String, dynamic> song) async {
-
     try {
-
       await channel.invokeMethod('shareFile', {
-
         'uri': '${song['uri'] ?? ''}',
 
         'path': '${song['path'] ?? ''}',
-
       });
-
     } catch (e) {
-
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Share failed: $e')));
-
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Share failed: $e')));
     }
-
   }
 
-
-
   Future<void> _setRingtone(Map<String, dynamic> song) async {
-
     try {
-
       final ok = await channel.invokeMethod('setRingtone', {
-
         'uri': '${song['uri'] ?? ''}',
 
         'name': '${song['title'] ?? 'Ringtone'}.mp3',
 
         'mimeType': 'audio/mpeg',
-
       });
 
       if (mounted) {
-
         ScaffoldMessenger.of(context).showSnackBar(
-
-          SnackBar(content: Text(ok == true ? 'Ringtone set successfully' : 'Could not set ringtone')),
-
+          SnackBar(
+            content: Text(
+              ok == true
+                  ? 'Ringtone set successfully'
+                  : 'Could not set ringtone',
+            ),
+          ),
         );
-
       }
-
     } catch (e) {
-
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ringtone failed: $e')));
-
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Ringtone failed: $e')));
     }
-
   }
-
-
 
   Future<void> _deleteSong(Map<String, dynamic> song) async {
     final path = '${song['path'] ?? ''}';
@@ -1797,10 +1482,18 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Delete song?'),
-        content: Text('${song['title'] ?? 'This song'} will be removed from device storage.'),
+        content: Text(
+          '${song['title'] ?? 'This song'} will be removed from device storage.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Delete')),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
         ],
       ),
     );
@@ -1815,7 +1508,11 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
       if (ok != true) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Delete failed. Android permission or MediaStore access is required.')),
+            const SnackBar(
+              content: Text(
+                'Delete failed. Android permission or MediaStore access is required.',
+              ),
+            ),
           );
         }
         return;
@@ -1845,64 +1542,51 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Delete failed: $e')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Delete failed: $e')));
       }
     }
   }
 
-  void selectSection(String section) => setState(() => selectedSection = section);
-
-
+  void selectSection(String section) =>
+      setState(() => selectedSection = section);
 
   List<Map<String, dynamic>> get favoriteSongs =>
-
       songs.where((s) => favorites.contains('${s['path']}')).toList();
 
-
-
   List<Map<String, dynamic>> get recentSongs {
-
     final result = <Map<String, dynamic>>[];
 
     for (final path in recents) {
-
       final match = songs.where((s) => '${s['path']}' == path).toList();
 
       if (match.isNotEmpty) result.add(match.first);
-
     }
 
     return result;
-
   }
 
+  List<String> get albums =>
+      songs.map((s) => '${s['album'] ?? 'Unknown Album'}').toSet().toList();
 
+  List<String> get artists =>
+      songs.map((s) => '${s['artist'] ?? 'Unknown Artist'}').toSet().toList();
 
-  List<String> get albums => songs.map((s) => '${s['album'] ?? 'Unknown Album'}').toSet().toList();
-
-  List<String> get artists => songs.map((s) => '${s['artist'] ?? 'Unknown Artist'}').toSet().toList();
-
-  List<String> get folders => songs.map((s) => '${s['folder'] ?? 'Unknown Folder'}').toSet().toList();
-
-
+  List<String> get folders =>
+      songs.map((s) => '${s['folder'] ?? 'Unknown Folder'}').toSet().toList();
 
   List<Map<String, dynamic>> get displayedSongs {
-
     switch (selectedSection) {
+      case 'Favorites':
+        return favoriteSongs;
 
-      case 'Favorites': return favoriteSongs;
+      case 'Recents':
+        return recentSongs;
 
-      case 'Recents': return recentSongs;
-
-      default: return filteredSongs;
-
+      default:
+        return filteredSongs;
     }
-
   }
-
-
 
   Widget artwork(Map<String, dynamic> song, {double size = 56}) {
     final artPath = '${song['albumArt'] ?? ''}';
@@ -1941,38 +1625,34 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
     );
   }
 
-
-
   @override
-
   Widget build(BuildContext context) {
-
     final isFavorite = currentPath != null && favorites.contains(currentPath);
 
     return Scaffold(
-
       backgroundColor: Colors.black,
 
       appBar: AppBar(
-
         backgroundColor: Colors.black,
 
-        title: const Text('Library', style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
+        title: const Text(
+          'Library',
+          style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold),
+        ),
 
         actions: [
-
           IconButton(
-
             onPressed: () => showSearch(
-
               context: context,
 
-              delegate: MusicSearchDelegate(songs: songs, onPlay: playSong, artwork: artwork),
-
+              delegate: MusicSearchDelegate(
+                songs: songs,
+                onPlay: playSong,
+                artwork: artwork,
+              ),
             ),
 
             icon: const Icon(Icons.search, size: 32),
-
           ),
 
           IconButton(
@@ -1981,211 +1661,192 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
             tooltip: 'Playback options',
           ),
 
-          IconButton(onPressed: () => _showMoreMenu(context), icon: const Icon(Icons.more_horiz, size: 30)),
+          IconButton(
+            onPressed: () => _showMoreMenu(context),
+            icon: const Icon(Icons.more_horiz, size: 30),
+          ),
 
-          const IconButton(onPressed: null, icon: Icon(Icons.account_circle_outlined, size: 32)),
-
+          const IconButton(
+            onPressed: null,
+            icon: Icon(Icons.account_circle_outlined, size: 32),
+          ),
         ],
-
       ),
 
       body: Column(
-
         children: [
-
           _buildQuickCards(),
 
           _buildTabs(),
 
-          Expanded(child: scanning ? const Center(child: CircularProgressIndicator()) : _buildContent()),
+          Expanded(
+            child: scanning
+                ? const Center(child: CircularProgressIndicator())
+                : _buildContent(),
+          ),
 
           if (currentPath != null) _buildMiniPlayer(isFavorite),
-
         ],
-
       ),
 
       bottomNavigationBar: NavigationBar(
-
         selectedIndex: 0,
 
         onDestinationSelected: (index) {
-
           if (index == 1) {
-
             showSearch(
-
               context: context,
 
-              delegate: MusicSearchDelegate(songs: songs, onPlay: playSong, artwork: artwork),
-
+              delegate: MusicSearchDelegate(
+                songs: songs,
+                onPlay: playSong,
+                artwork: artwork,
+              ),
             );
-
           }
-
         },
 
         destinations: const [
-
           NavigationDestination(icon: Icon(Icons.headphones), label: 'Library'),
 
           NavigationDestination(icon: Icon(Icons.search), label: 'Search'),
-
         ],
-
       ),
-
     );
-
   }
 
-
-
   Widget _buildQuickCards() {
-
     return SizedBox(
-
       height: 165,
 
       child: ListView(
-
         scrollDirection: Axis.horizontal,
 
         padding: const EdgeInsets.all(12),
 
         children: [
+          _quickCard(
+            'Favorites',
+            Icons.favorite,
+            () => selectSection('Favorites'),
+          ),
 
-          _quickCard('Favorites', Icons.favorite, () => selectSection('Favorites')),
-
-          _quickCard('Videos', Icons.video_library, () => selectSection('Videos')),
+          _quickCard(
+            'Videos',
+            Icons.video_library,
+            () => selectSection('Videos'),
+          ),
 
           _quickCard('Recent', Icons.history, () => selectSection('Recents')),
 
           _quickCard('Scan', Icons.refresh, scanAll),
-
         ],
-
       ),
-
     );
-
   }
 
-
-
   Widget _quickCard(String title, IconData icon, VoidCallback onTap) {
-
     return GestureDetector(
-
       onTap: onTap,
 
       child: Container(
-
         width: 145,
 
         margin: const EdgeInsets.only(right: 12),
 
-        decoration: BoxDecoration(color: const Color(0xFF202020), borderRadius: BorderRadius.circular(20)),
-
-        child: Column(
-
-          mainAxisAlignment: MainAxisAlignment.center,
-
-          children: [Icon(icon, size: 55), const SizedBox(height: 8), Text(title, style: const TextStyle(fontSize: 18))],
-
+        decoration: BoxDecoration(
+          color: const Color(0xFF202020),
+          borderRadius: BorderRadius.circular(20),
         ),
 
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+
+          children: [
+            Icon(icon, size: 55),
+            const SizedBox(height: 8),
+            Text(title, style: const TextStyle(fontSize: 18)),
+          ],
+        ),
       ),
-
     );
-
   }
 
-
-
   Widget _buildTabs() {
-
     const tabs = ['Tracks', 'Albums', 'Playlists', 'Artists', 'Folders'];
 
     return SizedBox(
-
       height: 60,
 
       child: ListView.builder(
-
         scrollDirection: Axis.horizontal,
 
         itemCount: tabs.length,
 
         itemBuilder: (_, index) {
-
           final tab = tabs[index];
 
           final selected = selectedSection == tab;
 
           return GestureDetector(
-
             onTap: () => selectSection(tab),
 
             child: Container(
-
               margin: const EdgeInsets.symmetric(horizontal: 14),
 
               alignment: Alignment.center,
 
               decoration: BoxDecoration(
-
-                border: selected ? const Border(bottom: BorderSide(width: 3, color: Colors.white)) : null,
-
+                border: selected
+                    ? const Border(
+                        bottom: BorderSide(width: 3, color: Colors.white),
+                      )
+                    : null,
               ),
 
               child: Text(
-
                 tab,
 
-                style: TextStyle(fontSize: 21, color: selected ? Colors.white : Colors.grey, fontWeight: selected ? FontWeight.bold : FontWeight.normal),
-
+                style: TextStyle(
+                  fontSize: 21,
+                  color: selected ? Colors.white : Colors.grey,
+                  fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                ),
               ),
-
             ),
-
           );
-
         },
-
       ),
-
     );
-
   }
-
-
 
   Widget _buildContent() {
-
     switch (selectedSection) {
+      case 'Albums':
+        return _buildAlbums();
 
-      case 'Albums': return _buildAlbums();
+      case 'Artists':
+        return _buildArtists();
 
-      case 'Artists': return _buildArtists();
+      case 'Folders':
+        return _buildFolders();
 
-      case 'Folders': return _buildFolders();
+      case 'Playlists':
+        return _buildPlaylists();
 
-      case 'Playlists': return _buildPlaylists();
+      case 'Videos':
+        return _buildVideos();
 
-      case 'Videos': return _buildVideos();
+      case 'Favorites':
+        return _buildSongList(favoriteSongs);
 
-      case 'Favorites': return _buildSongList(favoriteSongs);
+      case 'Recents':
+        return _buildSongList(recentSongs);
 
-      case 'Recents': return _buildSongList(recentSongs);
-
-      default: return _buildTracks();
-
+      default:
+        return _buildTracks();
     }
-
   }
-
-
 
   Widget _buildTracks() {
     final list = displayedSongs;
@@ -2258,7 +1919,11 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
     final wasPlaying = player.playing;
     final position = player.position;
     final order = await _buildPlaybackOrder(currentPath!);
-    await _loadPlaybackOrder(order, initialPosition: position, autoplay: wasPlaying);
+    await _loadPlaybackOrder(
+      order,
+      initialPosition: position,
+      autoplay: wasPlaying,
+    );
   }
 
   void _showPlaybackOptions() {
@@ -2272,67 +1937,80 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-              const ListTile(
-                title: Text(
-                  'Playback Options',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                const ListTile(
+                  title: Text(
+                    'Playback Options',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
                 ),
-              ),
-              SwitchListTile(
-                secondary: Icon(shuffle ? Icons.shuffle_on : Icons.shuffle),
-                title: const Text('Shuffle'),
-                subtitle: Text(shuffle ? 'Shuffle is ON' : 'Shuffle is OFF'),
-                value: shuffle,
-                onChanged: (value) {
-                  _setShuffle(value);
-                  Navigator.pop(sheetContext);
-                },
-              ),
-              ListTile(
-                leading: Icon(Icons.repeat, color: repeatMode == 'off' ? null : Colors.redAccent),
-                title: const Text('Repeat'),
-                subtitle: Text(repeatMode == 'one' ? 'Repeat One' : repeatMode == 'all' ? 'Repeat All' : 'Repeat Off'),
-                onTap: () async {
-                  final next = repeatMode == 'off' ? 'one' : repeatMode == 'one' ? 'all' : 'off';
-                  setState(() => repeatMode = next);
-                  await _applyRepeatMode(next);
-                  await _saveData();
-                  if (sheetContext.mounted) Navigator.pop(sheetContext);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.queue_music),
-                title: const Text('Play Queue'),
-                subtitle: Text('${playQueue.length} song(s) in queue'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _showQueue();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.sort),
-                title: const Text('Sort Order'),
-                subtitle: Text(
-                  sortMode == 'title'
-                      ? 'Song title'
-                      : sortMode == 'date'
-                          ? 'Date added'
-                          : 'Play count',
+                SwitchListTile(
+                  secondary: Icon(shuffle ? Icons.shuffle_on : Icons.shuffle),
+                  title: const Text('Shuffle'),
+                  subtitle: Text(shuffle ? 'Shuffle is ON' : 'Shuffle is OFF'),
+                  value: shuffle,
+                  onChanged: (value) {
+                    _setShuffle(value);
+                    Navigator.pop(sheetContext);
+                  },
                 ),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _showSortOrder();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.checklist),
-                title: const Text('Multi-select'),
-                subtitle: const Text('Select multiple songs'),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _toggleMultiSelect();
-                },
-              ),
+                ListTile(
+                  leading: Icon(
+                    Icons.repeat,
+                    color: repeatMode == 'off' ? null : Colors.redAccent,
+                  ),
+                  title: const Text('Repeat'),
+                  subtitle: Text(
+                    repeatMode == 'one'
+                        ? 'Repeat One'
+                        : repeatMode == 'all'
+                        ? 'Repeat All'
+                        : 'Repeat Off',
+                  ),
+                  onTap: () async {
+                    final next = repeatMode == 'off'
+                        ? 'one'
+                        : repeatMode == 'one'
+                        ? 'all'
+                        : 'off';
+                    setState(() => repeatMode = next);
+                    await _applyRepeatMode(next);
+                    await _saveData();
+                    if (sheetContext.mounted) Navigator.pop(sheetContext);
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.queue_music),
+                  title: const Text('Play Queue'),
+                  subtitle: Text('${playQueue.length} song(s) in queue'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _showQueue();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.sort),
+                  title: const Text('Sort Order'),
+                  subtitle: Text(
+                    sortMode == 'title'
+                        ? 'Song title'
+                        : sortMode == 'date'
+                        ? 'Date added'
+                        : 'Play count',
+                  ),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _showSortOrder();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.checklist),
+                  title: const Text('Multi-select'),
+                  subtitle: const Text('Select multiple songs'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _toggleMultiSelect();
+                  },
+                ),
                 const SizedBox(height: 8),
               ],
             ),
@@ -2343,15 +2021,18 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
   }
 
   Widget _buildSongList(List<Map<String, dynamic>> list) {
-
-    if (list.isEmpty) return const Center(child: Text('No songs found', style: TextStyle(color: Colors.grey, fontSize: 18)));
+    if (list.isEmpty)
+      return const Center(
+        child: Text(
+          'No songs found',
+          style: TextStyle(color: Colors.grey, fontSize: 18),
+        ),
+      );
 
     return ListView.builder(
-
       itemCount: list.length,
 
       itemBuilder: (_, index) {
-
         final song = list[index];
 
         final path = '${song['path'] ?? ''}';
@@ -2361,39 +2042,40 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
         final fav = favorites.contains(path);
 
         return ListTile(
-
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 4,
+          ),
 
           leading: Row(
-
             mainAxisSize: MainAxisSize.min,
 
             children: [
-
               if (multiSelectMode)
-
-                Checkbox(value: selectedPaths.contains(path), onChanged: (_) => _toggleSelected(path)),
+                Checkbox(
+                  value: selectedPaths.contains(path),
+                  onChanged: (_) => _toggleSelected(path),
+                ),
 
               artwork(song, size: 62),
-
             ],
-
           ),
 
           title: Text(
-
             '${song['title'] ?? 'Unknown Song'}',
 
             maxLines: 1,
 
             overflow: TextOverflow.ellipsis,
 
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: playing ? Colors.redAccent : Colors.white),
-
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: playing ? Colors.redAccent : Colors.white,
+            ),
           ),
 
           subtitle: Text(
-
             '${song['artist'] ?? 'Unknown Artist'}',
 
             maxLines: 1,
@@ -2401,191 +2083,185 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
             overflow: TextOverflow.ellipsis,
 
             style: TextStyle(color: playing ? Colors.redAccent : Colors.grey),
-
           ),
 
           trailing: Row(
-
             mainAxisSize: MainAxisSize.min,
 
             children: [
-
               if (playing)
-
                 StreamBuilder<bool>(
-
                   stream: player.playingStream,
 
-                  builder: (_, snapshot) => Icon(snapshot.data == true ? Icons.equalizer : Icons.play_arrow, color: Colors.redAccent),
-
+                  builder: (_, snapshot) => Icon(
+                    snapshot.data == true ? Icons.equalizer : Icons.play_arrow,
+                    color: Colors.redAccent,
+                  ),
                 ),
 
               if (!multiSelectMode)
-
                 IconButton(
-
                   onPressed: () => toggleFavoriteFor(path),
 
-                  icon: Icon(fav ? Icons.favorite : Icons.favorite_border, color: fav ? Colors.red : Colors.grey),
-
+                  icon: Icon(
+                    fav ? Icons.favorite : Icons.favorite_border,
+                    color: fav ? Colors.red : Colors.grey,
+                  ),
                 ),
 
               if (!multiSelectMode)
-
                 PopupMenuButton<String>(
-
                   onSelected: (value) {
-
                     switch (value) {
+                      case 'play_next':
+                        playNext(path);
+                        break;
 
-                      case 'play_next': playNext(path); break;
+                      case 'queue':
+                        addToQueue(path);
+                        break;
 
-                      case 'queue': addToQueue(path); break;
-
-                      case 'playlist': addToPlaylist(path); break;
+                      case 'playlist':
+                        addToPlaylist(path);
+                        break;
 
                       case 'album':
-
                         _showSongListPage(
-
                           '${song['album'] ?? 'Album'}',
 
-                          songs.where((s) => '${s['album']}' == '${song['album']}').toList(),
-
+                          songs
+                              .where(
+                                (s) => '${s['album']}' == '${song['album']}',
+                              )
+                              .toList(),
                         );
 
                         break;
 
-                      case 'info': _showSongInfo(song); break;
+                      case 'info':
+                        _showSongInfo(song);
+                        break;
 
-                      case 'ringtone': _setRingtone(song); break;
+                      case 'ringtone':
+                        _setRingtone(song);
+                        break;
 
-                      case 'share': _shareSong(song); break;
+                      case 'share':
+                        _shareSong(song);
+                        break;
 
-                      case 'delete': _deleteSong(song); break;
-
+                      case 'delete':
+                        _deleteSong(song);
+                        break;
                     }
-
                   },
 
                   itemBuilder: (_) => const [
-
                     PopupMenuItem(value: 'play_next', child: Text('Play next')),
 
-                    PopupMenuItem(value: 'queue', child: Text('Add to play queue')),
+                    PopupMenuItem(
+                      value: 'queue',
+                      child: Text('Add to play queue'),
+                    ),
 
-                    PopupMenuItem(value: 'playlist', child: Text('Add to Playlist')),
+                    PopupMenuItem(
+                      value: 'playlist',
+                      child: Text('Add to Playlist'),
+                    ),
 
                     PopupMenuItem(value: 'album', child: Text('Album')),
 
                     PopupMenuItem(value: 'info', child: Text('Song Info')),
 
-                    PopupMenuItem(value: 'ringtone', child: Text('Set as Ringtone')),
+                    PopupMenuItem(
+                      value: 'ringtone',
+                      child: Text('Set as Ringtone'),
+                    ),
 
                     PopupMenuItem(value: 'share', child: Text('Share file')),
 
                     PopupMenuItem(value: 'delete', child: Text('Delete')),
-
                   ],
-
                 ),
-
             ],
-
           ),
 
           onTap: () => multiSelectMode ? _toggleSelected(path) : playSong(song),
 
           onLongPress: () {
-
             if (!multiSelectMode) {
-
               setState(() {
-
                 multiSelectMode = true;
 
                 selectedPaths.add(path);
-
               });
-
             } else {
-
               _toggleSelected(path);
-
             }
-
           },
-
         );
-
       },
-
     );
-
   }
 
-
-
   Widget _buildAlbums() {
-
     if (albums.isEmpty) return const Center(child: Text('No albums found'));
 
     return GridView.builder(
-
       padding: const EdgeInsets.all(16),
 
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, childAspectRatio: .85, crossAxisSpacing: 12, mainAxisSpacing: 12),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        childAspectRatio: .85,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
+      ),
 
       itemCount: albums.length,
 
       itemBuilder: (_, index) {
-
         final album = albums[index];
 
         final list = songs.where((s) => '${s['album']}' == album).toList();
 
         return GestureDetector(
-
           onTap: () => _showSongListPage(album, list),
 
           child: Card(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                artwork(list.first, size: 120),
 
-            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                const SizedBox(height: 8),
 
-              artwork(list.first, size: 120),
-
-              const SizedBox(height: 8),
-
-              Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Text(album, maxLines: 2, textAlign: TextAlign.center, overflow: TextOverflow.ellipsis)),
-
-            ]),
-
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Text(
+                    album,
+                    maxLines: 2,
+                    textAlign: TextAlign.center,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
           ),
-
         );
-
       },
-
     );
-
   }
 
-
-
   Widget _buildArtists() {
-
     return ListView.builder(
-
       itemCount: artists.length,
 
       itemBuilder: (_, index) {
-
         final artist = artists[index];
 
         final list = songs.where((s) => '${s['artist']}' == artist).toList();
 
         return ListTile(
-
           leading: const CircleAvatar(child: Icon(Icons.person)),
 
           title: Text(artist),
@@ -2593,31 +2269,21 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
           subtitle: Text('${list.length} songs'),
 
           onTap: () => _showSongListPage(artist, list),
-
         );
-
       },
-
     );
-
   }
 
-
-
   Widget _buildFolders() {
-
     return ListView.builder(
-
       itemCount: folders.length,
 
       itemBuilder: (_, index) {
-
         final folder = folders[index];
 
         final list = songs.where((s) => '${s['folder']}' == folder).toList();
 
         return ListTile(
-
           leading: const Icon(Icons.folder, size: 38),
 
           title: Text(folder),
@@ -2625,16 +2291,10 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
           subtitle: Text('${list.length} songs'),
 
           onTap: () => _showSongListPage(folder, list),
-
         );
-
       },
-
     );
-
   }
-
-
 
   Future<void> _renamePlaylist(String oldName) async {
     final controller = TextEditingController(text: oldName);
@@ -2642,18 +2302,35 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Rename Playlist'),
-        content: TextField(controller: controller, autofocus: true, decoration: const InputDecoration(hintText: 'Playlist name')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'Playlist name'),
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-          FilledButton(onPressed: () { final name = controller.text.trim(); if (name.isNotEmpty) Navigator.pop(dialogContext, name); }, child: const Text('Save')),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isNotEmpty) Navigator.pop(dialogContext, name);
+            },
+            child: const Text('Save'),
+          ),
         ],
       ),
     );
     controller.dispose();
-    if (newName == null || newName.trim().isEmpty || newName.trim() == oldName) return;
+    if (newName == null || newName.trim().isEmpty || newName.trim() == oldName)
+      return;
     final trimmed = newName.trim();
     if (playlists.containsKey(trimmed)) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Playlist "$trimmed" already exists')));
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Playlist "$trimmed" already exists')),
+        );
       return;
     }
     final list = playlists.remove(oldName);
@@ -2669,8 +2346,14 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
         title: const Text('Delete Playlist?'),
         content: Text('Delete "$name"? The music files will not be deleted.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Delete')),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
         ],
       ),
     );
@@ -2685,7 +2368,10 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
       return path.isNotEmpty && !(playlists[playlistName] ?? []).contains(path);
     }).toList();
     if (available.isEmpty) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No more songs to add')));
+      if (mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('No more songs to add')));
       return;
     }
     final selected = <String>{};
@@ -2695,7 +2381,8 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
         builder: (context, dialogSetState) => AlertDialog(
           title: const Text('Add Songs'),
           content: SizedBox(
-            width: double.maxFinite, height: MediaQuery.of(context).size.height * .55,
+            width: double.maxFinite,
+            height: MediaQuery.of(context).size.height * .55,
             child: ListView.builder(
               itemCount: available.length,
               itemBuilder: (_, index) {
@@ -2710,22 +2397,38 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
                       selected.remove(path);
                     }
                   }),
-                  title: Text('${song['title'] ?? 'Unknown Song'}', maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: Text('${song['artist'] ?? 'Unknown Artist'}', maxLines: 1, overflow: TextOverflow.ellipsis),
+                  title: Text(
+                    '${song['title'] ?? 'Unknown Song'}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
+                    '${song['artist'] ?? 'Unknown Artist'}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 );
               },
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: Text('Add (${selected.length})')),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text('Add (${selected.length})'),
+            ),
           ],
         ),
       ),
     );
     if (result != true || selected.isEmpty) return;
     final list = playlists[playlistName] ?? <String>[];
-    for (final path in selected) { if (!list.contains(path)) list.add(path); }
+    for (final path in selected) {
+      if (!list.contains(path)) list.add(path);
+    }
     setState(() => playlists[playlistName] = list);
     await _saveData();
   }
@@ -2733,7 +2436,17 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
   Widget _buildPlaylists() {
     return Column(
       children: [
-        Align(alignment: Alignment.centerRight, child: Padding(padding: const EdgeInsets.all(12), child: FilledButton.icon(onPressed: createPlaylist, icon: const Icon(Icons.add), label: const Text('New Playlist')))),
+        Align(
+          alignment: Alignment.centerRight,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: FilledButton.icon(
+              onPressed: createPlaylist,
+              icon: const Icon(Icons.add),
+              label: const Text('New Playlist'),
+            ),
+          ),
+        ),
         Expanded(
           child: playlists.isEmpty
               ? const Center(child: Text('No playlists yet'))
@@ -2742,25 +2455,43 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
                   itemBuilder: (_, index) {
                     final name = playlists.keys.elementAt(index);
                     final paths = playlists[name] ?? [];
-                    final list = songs.where((s) => paths.contains('${s['path']}')).toList();
+                    final list = songs
+                        .where((s) => paths.contains('${s['path']}'))
+                        .toList();
                     return ListTile(
-                      leading: list.isEmpty ? const Icon(Icons.queue_music, size: 35) : artwork(list.first, size: 62),
-                      title: Text(name), subtitle: Text('${list.length} songs'),
+                      leading: list.isEmpty
+                          ? const Icon(Icons.queue_music, size: 35)
+                          : artwork(list.first, size: 62),
+                      title: Text(name),
+                      subtitle: Text('${list.length} songs'),
                       trailing: PopupMenuButton<String>(
                         onSelected: (value) {
                           switch (value) {
-                            case 'add': _addSongsToPlaylist(name); break;
-                            case 'rename': _renamePlaylist(name); break;
-                            case 'delete': _deletePlaylist(name); break;
+                            case 'add':
+                              _addSongsToPlaylist(name);
+                              break;
+                            case 'rename':
+                              _renamePlaylist(name);
+                              break;
+                            case 'delete':
+                              _deletePlaylist(name);
+                              break;
                           }
                         },
                         itemBuilder: (_) => const [
                           PopupMenuItem(value: 'add', child: Text('Add Songs')),
-                          PopupMenuItem(value: 'rename', child: Text('Rename Playlist')),
-                          PopupMenuItem(value: 'delete', child: Text('Delete Playlist')),
+                          PopupMenuItem(
+                            value: 'rename',
+                            child: Text('Rename Playlist'),
+                          ),
+                          PopupMenuItem(
+                            value: 'delete',
+                            child: Text('Delete Playlist'),
+                          ),
                         ],
                       ),
-                      onTap: () => _showSongListPage(name, list, playlistName: name),
+                      onTap: () =>
+                          _showSongListPage(name, list, playlistName: name),
                     );
                   },
                 ),
@@ -2770,15 +2501,12 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
   }
 
   Widget _buildVideos() {
-
     if (videos.isEmpty) return const Center(child: Text('No videos found'));
 
     return ListView.builder(
-
       itemCount: videos.length,
 
       itemBuilder: (_, index) {
-
         final video = videos[index];
 
         final name = '${video['name'] ?? 'Video'}';
@@ -2786,40 +2514,34 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
         final path = '${video['path'] ?? ''}';
 
         return ListTile(
-
           leading: const Icon(Icons.video_library, size: 40),
 
           title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
 
-          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => VideoPage(path: path, title: name))),
-
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => VideoPage(path: path, title: name),
+            ),
+          ),
         );
-
       },
-
     );
-
   }
 
-
-
-
   Widget _buildMiniPlayer(bool isFavorite) {
-
     final match = songs.where((s) => '${s['path']}' == currentPath).toList();
 
-    final song = match.isEmpty ? {'title': currentSong, 'artist': currentArtist, 'path': currentPath} : match.first;
+    final song = match.isEmpty
+        ? {'title': currentSong, 'artist': currentArtist, 'path': currentPath}
+        : match.first;
 
     return GestureDetector(
-
       onTap: () => Navigator.push(
-
         context,
 
         MaterialPageRoute(
-
           builder: (_) => NowPlayingPage(
-
             player: player,
 
             song: song,
@@ -2835,13 +2557,9 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
             repeatMode: repeatMode,
 
             onFavorite: () {
-
               if (currentPath != null) {
-
                 toggleFavoriteFor(currentPath!);
-
               }
-
             },
 
             onPrevious: previousSong,
@@ -2858,31 +2576,29 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
             onQueue: _showQueue,
             onSortOrder: _showSortOrder,
             onMultiSelect: _toggleMultiSelect,
-
           ),
-
         ),
-
       ),
 
       child: Container(
-
         height: 75,
 
         margin: const EdgeInsets.symmetric(horizontal: 12),
 
-        decoration: BoxDecoration(color: const Color(0xFF3D3D3D), borderRadius: BorderRadius.circular(16)),
+        decoration: BoxDecoration(
+          color: const Color(0xFF3D3D3D),
+          borderRadius: BorderRadius.circular(16),
+        ),
 
         child: Row(
-
           children: [
-
             StreamBuilder<bool>(
               stream: player.playingStream,
               builder: (_, snapshot) => PlayingArtwork(
                 song: song,
                 size: 58,
-                playing: snapshot.data == true && currentPath == '${song['path']}',
+                playing:
+                    snapshot.data == true && currentPath == '${song['path']}',
                 artwork: artwork,
               ),
             ),
@@ -2890,53 +2606,53 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
             const SizedBox(width: 10),
 
             Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    currentSong,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
 
-              child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
-
-                Text(currentSong, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold)),
-
-                Text(currentArtist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.grey)),
-
-              ]),
-
+                  Text(
+                    currentArtist,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+                ],
+              ),
             ),
 
             StreamBuilder<PlayerState>(
-
               stream: player.playerStateStream,
 
               builder: (_, snapshot) {
-
                 final playing = snapshot.data?.playing ?? player.playing;
 
                 return IconButton(
-
                   onPressed: () => playing ? player.pause() : player.play(),
 
                   icon: Icon(playing ? Icons.pause : Icons.play_arrow),
 
                   iconSize: 32,
-
                 );
-
               },
-
             ),
-
-
           ],
-
         ),
-
       ),
-
     );
-
   }
 
-
-
-  void _showSongListPage(String title, List<Map<String, dynamic>> list, {String? playlistName}) {
+  void _showSongListPage(
+    String title,
+    List<Map<String, dynamic>> list, {
+    String? playlistName,
+  }) {
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -2958,19 +2674,33 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
                   }
                 },
           artwork: artwork,
-          onRemove: playlistName == null ? null : (path) => _removeSongFromPlaylist(playlistName, path),
+          onRemove: playlistName == null
+              ? null
+              : (path) => _removeSongFromPlaylist(playlistName, path),
           playlistName: playlistName,
           onPlayAll: playlistName == null ? null : () => _playCollection(list),
-          onShuffleAll: playlistName == null ? null : () => _playCollection(list, shuffleOrder: true),
-          onAddSongs: playlistName == null ? null : () => _addSongsToPlaylist(playlistName),
-          onRenamePlaylist: playlistName == null ? null : () => _renamePlaylist(playlistName),
-          onDeletePlaylist: playlistName == null ? null : () => _deletePlaylist(playlistName),
-          onPlayNext: (path) => playNext(path), onQueue: (path) => addToQueue(path),
-          onAddToPlaylist: (path) => addToPlaylist(path), onSongInfo: (song) => _showSongInfo(song),
+          onShuffleAll: playlistName == null
+              ? null
+              : () => _playCollection(list, shuffleOrder: true),
+          onAddSongs: playlistName == null
+              ? null
+              : () => _addSongsToPlaylist(playlistName),
+          onRenamePlaylist: playlistName == null
+              ? null
+              : () => _renamePlaylist(playlistName),
+          onDeletePlaylist: playlistName == null
+              ? null
+              : () => _deletePlaylist(playlistName),
+          onPlayNext: (path) => playNext(path),
+          onQueue: (path) => addToQueue(path),
+          onAddToPlaylist: (path) => addToPlaylist(path),
+          onSongInfo: (song) => _showSongInfo(song),
           onAlbum: (song) async {
             _showSongListPage(
               '${song['album'] ?? 'Album'}',
-              songs.where((s) => '${s['album']}' == '${song['album']}').toList(),
+              songs
+                  .where((s) => '${s['album']}' == '${song['album']}')
+                  .toList(),
             );
           },
           onShare: (song) => _shareSong(song),
@@ -2995,60 +2725,82 @@ class _MusicHomePageState extends State<MusicHomePage> with WidgetsBindingObserv
   }
 
   void _showMoreMenu(BuildContext context) {
-
     showModalBottomSheet<void>(
-
       context: context,
 
       builder: (sheetContext) => SafeArea(
-
         child: Column(
-
           mainAxisSize: MainAxisSize.min,
 
           children: [
+            ListTile(
+              leading: const Icon(Icons.checklist),
+              title: const Text('Multi-select'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _toggleMultiSelect();
+              },
+            ),
 
-            ListTile(leading: const Icon(Icons.checklist), title: const Text('Multi-select'), onTap: () { Navigator.pop(sheetContext); _toggleMultiSelect(); }),
+            ListTile(
+              leading: const Icon(Icons.sort),
+              title: const Text('Sort Order'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _showSortOrder();
+              },
+            ),
 
-            ListTile(leading: const Icon(Icons.sort), title: const Text('Sort Order'), onTap: () { Navigator.pop(sheetContext); _showSortOrder(); }),
+            ListTile(
+              leading: const Icon(Icons.queue_music),
+              title: const Text('Play queue'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _showQueue();
+              },
+            ),
 
-            ListTile(leading: const Icon(Icons.queue_music), title: const Text('Play queue'), onTap: () { Navigator.pop(sheetContext); _showQueue(); }),
+            ListTile(
+              leading: const Icon(Icons.refresh),
+              title: const Text('Scan Music'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                scanAll();
+              },
+            ),
 
-            ListTile(leading: const Icon(Icons.refresh), title: const Text('Scan Music'), onTap: () { Navigator.pop(sheetContext); scanAll(); }),
+            ListTile(
+              leading: const Icon(Icons.favorite),
+              title: const Text('Favorites'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                selectSection('Favorites');
+              },
+            ),
 
-            ListTile(leading: const Icon(Icons.favorite), title: const Text('Favorites'), onTap: () { Navigator.pop(sheetContext); selectSection('Favorites'); }),
-
-            ListTile(leading: const Icon(Icons.history), title: const Text('Recent'), onTap: () { Navigator.pop(sheetContext); selectSection('Recents'); }),
-
+            ListTile(
+              leading: const Icon(Icons.history),
+              title: const Text('Recent'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                selectSection('Recents');
+              },
+            ),
           ],
-
         ),
-
       ),
-
     );
-
   }
 
-
-
   @override
-
   void dispose() {
-
     WidgetsBinding.instance.removeObserver(this);
     _savePlaybackState();
     player.dispose();
 
     super.dispose();
-
   }
-
 }
-
-
-
-
 
 class PlayingArtwork extends StatefulWidget {
   final Map<String, dynamic> song;
@@ -3103,7 +2855,11 @@ class _PlayingArtworkState extends State<PlayingArtwork>
       animation: _controller,
       builder: (_, child) {
         final pulse = widget.playing
-            ? 1.0 + (_controller.value < .5 ? _controller.value : 1 - _controller.value) * .035
+            ? 1.0 +
+                  (_controller.value < .5
+                          ? _controller.value
+                          : 1 - _controller.value) *
+                      .035
             : 1.0;
         return Transform.scale(
           scale: pulse,
@@ -3112,7 +2868,9 @@ class _PlayingArtworkState extends State<PlayingArtwork>
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
-                color: widget.playing ? Colors.deepOrangeAccent : Colors.transparent,
+                color: widget.playing
+                    ? Colors.deepOrangeAccent
+                    : Colors.transparent,
                 width: 3,
               ),
               boxShadow: widget.playing
@@ -3135,7 +2893,6 @@ class _PlayingArtworkState extends State<PlayingArtwork>
 }
 
 class NowPlayingPage extends StatefulWidget {
-
   final AudioPlayer player;
 
   final Map<String, dynamic> song;
@@ -3164,10 +2921,7 @@ class NowPlayingPage extends StatefulWidget {
   final VoidCallback onSortOrder;
   final VoidCallback onMultiSelect;
 
-
-
   const NowPlayingPage({
-
     super.key,
 
     required this.player,
@@ -3197,21 +2951,13 @@ class NowPlayingPage extends StatefulWidget {
     required this.onQueue,
     required this.onSortOrder,
     required this.onMultiSelect,
-
   });
 
-
-
   @override
-
   State<NowPlayingPage> createState() => _NowPlayingPageState();
-
 }
 
-
-
 class _NowPlayingPageState extends State<NowPlayingPage> {
-
   late bool _favorite;
   late bool _shuffle;
   late String _repeatMode;
@@ -3275,8 +3021,6 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     }
   }
 
-
-
   @override
   void dispose() {
     _indexSubscription?.cancel();
@@ -3289,45 +3033,34 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     final artist = '${_displaySong['artist'] ?? 'Unknown Artist'}';
 
     return Scaffold(
-
       backgroundColor: const Color(0xFF29251F),
 
       body: SafeArea(
-
         child: Column(
-
           children: [
-
             Padding(
-
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
 
               child: Row(
-
                 children: [
-
-                  IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.keyboard_arrow_down, size: 38)),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.keyboard_arrow_down, size: 38),
+                  ),
 
                   const Spacer(),
 
                   const Spacer(),
 
                   const Icon(Icons.music_note),
-
                 ],
-
               ),
-
             ),
 
             Expanded(
-
               child: SingleChildScrollView(
-
                 child: Column(
-
                   children: [
-
                     const SizedBox(height: 20),
 
                     StreamBuilder<bool>(
@@ -3336,66 +3069,72 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                         song: _displaySong,
                         size: MediaQuery.of(context).size.width * .78,
                         playing: snapshot.data == true,
-                        artwork: (s, {double size = 56}) => _artwork(s, size: size),
+                        artwork: (s, {double size = 56}) =>
+                            _artwork(s, size: size),
                       ),
                     ),
 
                     const SizedBox(height: 25),
 
                     Padding(
-
                       padding: const EdgeInsets.symmetric(horizontal: 25),
 
                       child: Row(
-
                         children: [
-
                           Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 30,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
 
-                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                const SizedBox(height: 5),
 
-                              Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
-
-                              const SizedBox(height: 5),
-
-                              Text(artist, style: const TextStyle(fontSize: 22, color: Colors.white70)),
-
-                            ]),
-
+                                Text(
+                                  artist,
+                                  style: const TextStyle(
+                                    fontSize: 22,
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
 
-                          IconButton(onPressed: () {
-                            setState(() => _favorite = !_favorite);
-                            widget.onFavorite();
-                          }, icon: Icon(_favorite ? Icons.favorite : Icons.favorite_border, size: 38, color: _favorite ? Colors.red : Colors.white)),
-
+                          IconButton(
+                            onPressed: () {
+                              setState(() => _favorite = !_favorite);
+                              widget.onFavorite();
+                            },
+                            icon: Icon(
+                              _favorite
+                                  ? Icons.favorite
+                                  : Icons.favorite_border,
+                              size: 38,
+                              color: _favorite ? Colors.red : Colors.white,
+                            ),
+                          ),
                         ],
-
                       ),
-
                     ),
-
                   ],
-
                 ),
-
               ),
-
             ),
 
             _buildControls(),
-
           ],
-
         ),
-
       ),
-
     );
-
   }
-
-
 
   Widget _artwork(Map<String, dynamic> song, {double? size}) {
     final path = '${song['albumArt'] ?? ''}';
@@ -3410,7 +3149,8 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
           width: actualSize,
           height: actualSize,
           fit: BoxFit.cover,
-          cacheWidth: (actualSize * MediaQuery.of(context).devicePixelRatio).round(),
+          cacheWidth: (actualSize * MediaQuery.of(context).devicePixelRatio)
+              .round(),
           errorBuilder: (_, _, _) => Container(
             width: actualSize,
             height: actualSize,
@@ -3435,10 +3175,7 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     );
   }
 
-
-
   Widget _buildControls() {
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(25, 5, 25, 25),
       child: Column(
@@ -3455,13 +3192,22 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                   return Column(
                     children: [
                       Slider(
-                        value: duration.inMilliseconds == 0 ? 0 : position.inMilliseconds.toDouble(),
-                        max: duration.inMilliseconds == 0 ? 1 : duration.inMilliseconds.toDouble(),
-                        onChanged: (value) => widget.player.seek(Duration(milliseconds: value.toInt())),
+                        value: duration.inMilliseconds == 0
+                            ? 0
+                            : position.inMilliseconds.toDouble(),
+                        max: duration.inMilliseconds == 0
+                            ? 1
+                            : duration.inMilliseconds.toDouble(),
+                        onChanged: (value) => widget.player.seek(
+                          Duration(milliseconds: value.toInt()),
+                        ),
                       ),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [Text(_format(position)), Text(_format(duration))],
+                        children: [
+                          Text(_format(position)),
+                          Text(_format(duration)),
+                        ],
                       ),
                     ],
                   );
@@ -3473,7 +3219,11 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              IconButton(onPressed: widget.onPrevious, icon: const Icon(Icons.skip_previous), iconSize: 45),
+              IconButton(
+                onPressed: widget.onPrevious,
+                icon: const Icon(Icons.skip_previous),
+                iconSize: 45,
+              ),
               const SizedBox(width: 28),
               StreamBuilder<bool>(
                 stream: widget.player.playingStream,
@@ -3487,14 +3237,23 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                       border: Border.all(color: Colors.white, width: 2),
                     ),
                     child: IconButton(
-                      onPressed: () => playing ? widget.player.pause() : widget.player.play(),
-                      icon: Icon(playing ? Icons.pause : Icons.play_arrow, size: 45),
+                      onPressed: () => playing
+                          ? widget.player.pause()
+                          : widget.player.play(),
+                      icon: Icon(
+                        playing ? Icons.pause : Icons.play_arrow,
+                        size: 45,
+                      ),
                     ),
                   );
                 },
               ),
               const SizedBox(width: 28),
-              IconButton(onPressed: widget.onNext, icon: const Icon(Icons.skip_next), iconSize: 45),
+              IconButton(
+                onPressed: widget.onNext,
+                icon: const Icon(Icons.skip_next),
+                iconSize: 45,
+              ),
             ],
           ),
           const SizedBox(height: 6),
@@ -3541,15 +3300,15 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                   _repeatMode == 'off'
                       ? 'Repeat Off'
                       : _repeatMode == 'one'
-                          ? 'Repeat One'
-                          : 'Repeat All',
+                      ? 'Repeat One'
+                      : 'Repeat All',
                 ),
                 onTap: () {
                   final next = _repeatMode == 'off'
                       ? 'one'
                       : _repeatMode == 'one'
-                          ? 'all'
-                          : 'off';
+                      ? 'all'
+                      : 'off';
                   setState(() => _repeatMode = next);
                   widget.onRepeatModeChanged(next);
                   Navigator.pop(sheetContext);
@@ -3588,11 +3347,9 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     );
   }
 
-  String _format(Duration d) => '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
-
+  String _format(Duration d) =>
+      '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
 }
-
-
 
 class SongListPage extends StatefulWidget {
   final String title;
@@ -3612,69 +3369,185 @@ class SongListPage extends StatefulWidget {
   final Future<void> Function(Map<String, dynamic> song) onSongInfo;
   final Future<void> Function(Map<String, dynamic> song) onAlbum;
   final Future<void> Function(Map<String, dynamic> song) onShare;
-  const SongListPage({super.key, required this.title, required this.songs, required this.onPlay, required this.artwork, this.onRemove, this.playlistName, this.onRenamePlaylist, this.onDeletePlaylist, this.onAddSongs, this.onPlayAll, this.onShuffleAll, required this.onPlayNext, required this.onQueue, required this.onAddToPlaylist, required this.onSongInfo, required this.onAlbum, required this.onShare});
-  @override State<SongListPage> createState() => _SongListPageState();
+  const SongListPage({
+    super.key,
+    required this.title,
+    required this.songs,
+    required this.onPlay,
+    required this.artwork,
+    this.onRemove,
+    this.playlistName,
+    this.onRenamePlaylist,
+    this.onDeletePlaylist,
+    this.onAddSongs,
+    this.onPlayAll,
+    this.onShuffleAll,
+    required this.onPlayNext,
+    required this.onQueue,
+    required this.onAddToPlaylist,
+    required this.onSongInfo,
+    required this.onAlbum,
+    required this.onShare,
+  });
+  @override
+  State<SongListPage> createState() => _SongListPageState();
 }
 
 class _SongListPageState extends State<SongListPage> {
   late List<Map<String, dynamic>> visibleSongs;
-  @override void initState() { super.initState(); visibleSongs = List<Map<String, dynamic>>.from(widget.songs); }
+  @override
+  void initState() {
+    super.initState();
+    visibleSongs = List<Map<String, dynamic>>.from(widget.songs);
+  }
+
   Future<void> _remove(Map<String, dynamic> song) async {
     final path = '${song['path'] ?? ''}';
     if (path.isEmpty || widget.onRemove == null) return;
-    final confirmed = await showDialog<bool>(context: context, builder: (dialogContext) => AlertDialog(title: const Text('Remove from Playlist?'), content: Text('Remove "${song['title'] ?? 'this song'}" from this playlist?'), actions: [TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Remove'))]));
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove from Playlist?'),
+        content: Text(
+          'Remove "${song['title'] ?? 'this song'}" from this playlist?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
     if (confirmed != true || !mounted) return;
     await widget.onRemove!(path);
-    if (mounted) setState(() => visibleSongs.removeWhere((s) => '${s['path'] ?? ''}' == path));
+    if (mounted)
+      setState(
+        () => visibleSongs.removeWhere((s) => '${s['path'] ?? ''}' == path),
+      );
   }
-  @override Widget build(BuildContext context) {
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.title),
-        actions: widget.playlistName == null ? const [] : [PopupMenuButton<String>(
-          onSelected: (value) async {
-            switch (value) {
-              case 'play_all': await widget.onPlayAll?.call(); break;
-              case 'shuffle': await widget.onShuffleAll?.call(); break;
-              case 'add': await widget.onAddSongs?.call(); break;
-              case 'rename': await widget.onRenamePlaylist?.call(); break;
-              case 'delete': await widget.onDeletePlaylist?.call(); if (context.mounted) Navigator.pop(context); break;
-            }
-          },
-          itemBuilder: (_) => const [PopupMenuItem(value: 'play_all', child: Text('Play All')), PopupMenuItem(value: 'shuffle', child: Text('Shuffle')), PopupMenuItem(value: 'add', child: Text('Add Songs')), PopupMenuItem(value: 'rename', child: Text('Rename Playlist')), PopupMenuItem(value: 'delete', child: Text('Delete Playlist'))],
-        )],
+        actions: widget.playlistName == null
+            ? const []
+            : [
+                PopupMenuButton<String>(
+                  onSelected: (value) async {
+                    switch (value) {
+                      case 'play_all':
+                        await widget.onPlayAll?.call();
+                        break;
+                      case 'shuffle':
+                        await widget.onShuffleAll?.call();
+                        break;
+                      case 'add':
+                        await widget.onAddSongs?.call();
+                        break;
+                      case 'rename':
+                        await widget.onRenamePlaylist?.call();
+                        break;
+                      case 'delete':
+                        await widget.onDeletePlaylist?.call();
+                        if (context.mounted) Navigator.pop(context);
+                        break;
+                    }
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'play_all', child: Text('Play All')),
+                    PopupMenuItem(value: 'shuffle', child: Text('Shuffle')),
+                    PopupMenuItem(value: 'add', child: Text('Add Songs')),
+                    PopupMenuItem(
+                      value: 'rename',
+                      child: Text('Rename Playlist'),
+                    ),
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Text('Delete Playlist'),
+                    ),
+                  ],
+                ),
+              ],
       ),
-      body: visibleSongs.isEmpty ? const Center(child: Text('No songs in this playlist')) : ListView.builder(
-        itemCount: visibleSongs.length,
-        itemBuilder: (_, index) {
-          final song = visibleSongs[index];
-          final path = '${song['path'] ?? ''}';
-          return ListTile(
-            leading: widget.artwork(song), title: Text('${song['title'] ?? 'Unknown Song'}'), subtitle: Text('${song['artist'] ?? 'Unknown Artist'}'), onTap: () => widget.onPlay(song),
-            trailing: PopupMenuButton<String>(
-              onSelected: (value) async {
-                switch (value) {
-                  case 'play_next': await widget.onPlayNext(path); break;
-                  case 'queue': await widget.onQueue(path); break;
-                  case 'playlist': await widget.onAddToPlaylist(path); break;
-                  case 'info': await widget.onSongInfo(song); break;
-                  case 'album': await widget.onAlbum(song); break;
-                  case 'share': await widget.onShare(song); break;
-                  case 'remove': await _remove(song); break;
-                }
+      body: visibleSongs.isEmpty
+          ? const Center(child: Text('No songs in this playlist'))
+          : ListView.builder(
+              itemCount: visibleSongs.length,
+              itemBuilder: (_, index) {
+                final song = visibleSongs[index];
+                final path = '${song['path'] ?? ''}';
+                return ListTile(
+                  leading: widget.artwork(song),
+                  title: Text('${song['title'] ?? 'Unknown Song'}'),
+                  subtitle: Text('${song['artist'] ?? 'Unknown Artist'}'),
+                  onTap: () => widget.onPlay(song),
+                  trailing: PopupMenuButton<String>(
+                    onSelected: (value) async {
+                      switch (value) {
+                        case 'play_next':
+                          await widget.onPlayNext(path);
+                          break;
+                        case 'queue':
+                          await widget.onQueue(path);
+                          break;
+                        case 'playlist':
+                          await widget.onAddToPlaylist(path);
+                          break;
+                        case 'info':
+                          await widget.onSongInfo(song);
+                          break;
+                        case 'album':
+                          await widget.onAlbum(song);
+                          break;
+                        case 'share':
+                          await widget.onShare(song);
+                          break;
+                        case 'remove':
+                          await _remove(song);
+                          break;
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 'play_next',
+                        child: Text('Play next'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'queue',
+                        child: Text('Add to queue'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'playlist',
+                        child: Text('Add to another playlist'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'info',
+                        child: Text('Song Info'),
+                      ),
+                      const PopupMenuItem(value: 'album', child: Text('Album')),
+                      const PopupMenuItem(value: 'share', child: Text('Share')),
+                      if (widget.onRemove != null)
+                        const PopupMenuItem(
+                          value: 'remove',
+                          child: Text('Remove from this playlist'),
+                        ),
+                    ],
+                  ),
+                );
               },
-              itemBuilder: (_) => [const PopupMenuItem(value: 'play_next', child: Text('Play next')), const PopupMenuItem(value: 'queue', child: Text('Add to queue')), const PopupMenuItem(value: 'playlist', child: Text('Add to another playlist')), const PopupMenuItem(value: 'info', child: Text('Song Info')), const PopupMenuItem(value: 'album', child: Text('Album')), const PopupMenuItem(value: 'share', child: Text('Share')), if (widget.onRemove != null) const PopupMenuItem(value: 'remove', child: Text('Remove from this playlist'))],
             ),
-          );
-        },
-      ),
     );
   }
 }
 
-
 class VideoPage extends StatefulWidget {
-
   final String path;
 
   final String title;
@@ -3682,159 +3555,119 @@ class VideoPage extends StatefulWidget {
   const VideoPage({super.key, required this.path, required this.title});
 
   @override
-
   State<VideoPage> createState() => _VideoPageState();
-
 }
 
-
-
 class _VideoPageState extends State<VideoPage> {
-
   VideoPlayerController? controller;
 
-
-
   @override
-
   void initState() {
-
     super.initState();
 
     controller = VideoPlayerController.file(File(widget.path))
-
       ..initialize().then((_) {
-
         if (mounted) setState(() {});
-
       });
-
   }
 
-
-
   @override
-
   Widget build(BuildContext context) {
-
     final c = controller;
 
     return Scaffold(
-
       appBar: AppBar(title: Text(widget.title)),
 
       body: c == null || !c.value.isInitialized
-
           ? const Center(child: CircularProgressIndicator())
-
           : Center(
-
               child: AspectRatio(
-
                 aspectRatio: c.value.aspectRatio,
 
-                child: Stack(alignment: Alignment.bottomCenter, children: [
+                child: Stack(
+                  alignment: Alignment.bottomCenter,
+                  children: [
+                    VideoPlayer(c),
 
-                  VideoPlayer(c),
+                    VideoProgressIndicator(c, allowScrubbing: true),
 
-                  VideoProgressIndicator(c, allowScrubbing: true),
-
-                  Center(child: IconButton(iconSize: 64, icon: Icon(c.value.isPlaying ? Icons.pause : Icons.play_arrow), onPressed: () => setState(() => c.value.isPlaying ? c.pause() : c.play()))),
-
-                ]),
-
+                    Center(
+                      child: IconButton(
+                        iconSize: 64,
+                        icon: Icon(
+                          c.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                        ),
+                        onPressed: () => setState(
+                          () => c.value.isPlaying ? c.pause() : c.play(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-
             ),
-
     );
-
   }
 
-
-
   @override
-
   void dispose() {
-
     controller?.dispose();
 
     super.dispose();
-
   }
-
 }
 
-
-
 class MusicSearchDelegate extends SearchDelegate<Map<String, dynamic>?> {
-
   final List<Map<String, dynamic>> songs;
 
   final Future<void> Function(Map<String, dynamic>) onPlay;
 
   final Widget Function(Map<String, dynamic>, {double size}) artwork;
 
-
-
-  MusicSearchDelegate({required this.songs, required this.onPlay, required this.artwork});
-
-
-
-  @override
-
-  List<Widget>? buildActions(BuildContext context) => [IconButton(onPressed: () => query = '', icon: const Icon(Icons.clear))];
+  MusicSearchDelegate({
+    required this.songs,
+    required this.onPlay,
+    required this.artwork,
+  });
 
   @override
+  List<Widget>? buildActions(BuildContext context) => [
+    IconButton(onPressed: () => query = '', icon: const Icon(Icons.clear)),
+  ];
 
-  Widget? buildLeading(BuildContext context) => IconButton(onPressed: () => close(context, null), icon: const Icon(Icons.arrow_back));
-
-
+  @override
+  Widget? buildLeading(BuildContext context) => IconButton(
+    onPressed: () => close(context, null),
+    icon: const Icon(Icons.arrow_back),
+  );
 
   List<Map<String, dynamic>> get matches {
-
     final q = query.toLowerCase().trim();
 
     if (q.isEmpty) return songs;
 
     return songs.where((s) {
-
       return '${s['title'] ?? ''}'.toLowerCase().contains(q) ||
-
           '${s['artist'] ?? ''}'.toLowerCase().contains(q) ||
-
           '${s['album'] ?? ''}'.toLowerCase().contains(q) ||
-
           '${s['folder'] ?? ''}'.toLowerCase().contains(q);
-
     }).toList();
-
   }
 
-
-
   @override
-
   Widget buildResults(BuildContext context) => _results();
 
   @override
-
   Widget buildSuggestions(BuildContext context) => _results();
 
-
-
   Widget _results() {
-
     return ListView.builder(
-
       itemCount: matches.length,
 
       itemBuilder: (context, index) {
-
         final song = matches[index];
 
         return ListTile(
-
           leading: artwork(song),
 
           title: Text('${song['title'] ?? 'Unknown Song'}'),
@@ -3842,19 +3675,12 @@ class MusicSearchDelegate extends SearchDelegate<Map<String, dynamic>?> {
           subtitle: Text('${song['artist'] ?? 'Unknown Artist'}'),
 
           onTap: () async {
-
             await onPlay(song);
 
             if (context.mounted) close(context, song);
-
           },
-
         );
-
       },
-
     );
-
   }
-
 }
